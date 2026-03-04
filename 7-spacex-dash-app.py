@@ -23,7 +23,7 @@ server = app.server
 
 # Create an app layout
 app.layout = html.Div(children=[html.H1('SpaceX Launch Records Dashboard',
-                                        style={'textAlign': 'center', 'color': '#503D36',
+                                        style={'textAlign': 'center' 'color': '#503D36',
                                                'font-size': 40}),
                                 # TASK 1: Add a dropdown list to enable Launch Site selection
                                 # The default select value is for ALL sites
@@ -134,4 +134,4 @@ def update_scattergraph(site_dropdown,payload_slider):
 
 # Run the app
 if __name__ == '__main__':
-    app.run()
+    app.run_server(host='0.0.0.0', port=8050)
