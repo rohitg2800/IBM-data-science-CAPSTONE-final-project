@@ -1,4 +1,4 @@
-dash==2.15.0
-pandas==2.2.1
-plotly==5.18.0
-gunicorn==21.2.0
+dash
+pandas
+plotly
+gunicorn
