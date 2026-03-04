@@ -1,9 +1,9 @@
 # Import required libraries
 import pandas as pd
 import dash
-import dash_html_components as html
-import dash_core_components as dcc
-from dash.dependencies import Input, Output
+import dash.html as html
+import dash.dcc as dcc
+from dash import Input, Output
 import plotly.express as px
 
 # Read the airline data into pandas dataframe
@@ -19,6 +19,7 @@ for launch_site in all_launch_sites:
 
 # Create a dash application
 app = dash.Dash(__name__)
+server = app.server 
 
 # Create an app layout
 app.layout = html.Div(children=[html.H1('SpaceX Launch Records Dashboard',
@@ -133,4 +134,4 @@ def update_scattergraph(site_dropdown,payload_slider):
 
 # Run the app
 if __name__ == '__main__':
-    app.run_server()
+    app.run()
