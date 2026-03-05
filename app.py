@@ -6,111 +6,170 @@ import dash
 from dash import dcc, html, Input, Output
 import plotly.express as px
 
-# ------------------ 1️⃣ Load the data ------------------
+
+# ----------------------------
+# Data load (Render-safe path)
+# ----------------------------
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = BASE_DIR / "spacex_launch_dash.csv"   # adjust if you move it to a sub‑folder
+DATA_PATH = BASE_DIR / "output_file.csv"
 
-# Optional fallback URL (uncomment if you prefer remote download)
-# DATA_URL = "https://raw.githubusercontent.com/plotly/datasets/master/spacex_launch_dash.csv"
-
-def load_dataset():
-    """Try local CSV → remote URL → clear error."""
-    if DATA_PATH.is_file():
-        return pd.read_csv(DATA_PATH)
-
-    # Uncomment the block below to enable remote fallback
-    # print("⚡️ Local CSV not found → downloading from", DATA_URL)
-    # return pd.read_csv(DATA_URL)
-
+if not DATA_PATH.exists():
     raise FileNotFoundError(
-        f"Dataset not found at {DATA_PATH}. "
-        "Make sure the CSV is committed (and not ignored) or enable the remote fallback."
+        f"Missing dataset at {DATA_PATH}. Ensure output_file.csv is committed to the repo."
     )
 
-spacex_df = load_dataset()
+df = pd.read_csv(DATA_PATH)
 
-# ------------------ 2️⃣ Prep constants ------------------
-max_payload = spacex_df["Payload Mass (kg)"].max()
-min_payload = spacex_df["Payload Mass (kg)"].min()
+# Normalize / clean
+# success can be True/False/NaN; we keep NaN as "Unknown"
+df["success_label"] = df["success"].map({True: "Success", False: "Failure"}).fillna("Unknown")
 
-launch_sites = [{"label": "All Sites", "value": "All Sites"}] + [
-    {"label": s, "value": s} for s in spacex_df["Launch Site"].unique()
+# Convert date_utc -> datetime (safe even if format varies)
+df["date_utc_dt"] = pd.to_datetime(df["date_utc"], errors="coerce", utc=True)
+df["year"] = df["date_utc_dt"].dt.year
+
+# For plotting success as numeric (Success=1, Failure=0, Unknown=NaN)
+df["success_num"] = df["success"].map({True: 1, False: 0})
+
+# Dropdown options
+launchpads = sorted(df["launchpad"].dropna().unique().tolist())
+rockets = sorted(df["rocket"].dropna().unique().tolist())
+
+launchpad_options = [{"label": "All Launchpads", "value": "ALL"}] + [
+    {"label": lp, "value": lp} for lp in launchpads
+]
+rocket_options = [{"label": "All Rockets", "value": "ALL"}] + [
+    {"label": r, "value": r} for r in rockets
 ]
 
-# ------------------ 3️⃣ Build the Dash app ------------------
+# ----------------------------
+# Dash app
+# ----------------------------
 app = dash.Dash(__name__)
-server = app.server  # <-- Gunicorn looks for this
+server = app.server  # required for gunicorn on Render
 
 app.layout = html.Div(
+    style={"maxWidth": "1100px", "margin": "0 auto", "padding": "16px"},
     children=[
         html.H1(
-            "SpaceX Launch Records Dashboard",
-            style={"textAlign": "center", "color": "#503D36", "fontSize": 40},
+            "SpaceX Launch Dashboard (API v4 dataset)",
+            style={"textAlign": "center", "color": "#503D36"},
         ),
-        dcc.Dropdown(
-            id="site-dropdown",
-            options=launch_sites,
-            value="All Sites",
-            searchable=True,
-            clearable=False,
+
+        html.Div(
+            style={"display": "flex", "gap": "12px", "flexWrap": "wrap"},
+            children=[
+                html.Div(
+                    style={"flex": "1 1 340px"},
+                    children=[
+                        html.Label("Launchpad"),
+                        dcc.Dropdown(
+                            id="launchpad-dd",
+                            options=launchpad_options,
+                            value="ALL",
+                            clearable=False,
+                            searchable=True,
+                        ),
+                    ],
+                ),
+                html.Div(
+                    style={"flex": "1 1 340px"},
+                    children=[
+                        html.Label("Rocket"),
+                        dcc.Dropdown(
+                            id="rocket-dd",
+                            options=rocket_options,
+                            value="ALL",
+                            clearable=False,
+                            searchable=True,
+                        ),
+                    ],
+                ),
+            ],
         ),
+
         html.Br(),
-        dcc.Graph(id="success-pie-chart"),
-        html.Br(),
-        html.P("Payload range (Kg):"),
-        dcc.RangeSlider(
-            id="payload_slider",
-            min=0,
-            max=10000,
-            step=1000,
-            marks={i: {"label": f"{i} Kg"} for i in range(0, 10001, 1000)},
-            value=[int(min_payload), int(max_payload)],
+
+        html.Div(
+            style={"display": "flex", "gap": "12px", "flexWrap": "wrap"},
+            children=[
+                html.Div(style={"flex": "1 1 520px"}, children=[dcc.Graph(id="pie-success")]),
+                html.Div(style={"flex": "1 1 520px"}, children=[dcc.Graph(id="bar-year")]),
+            ],
         ),
+
         html.Br(),
-        dcc.Graph(id="success-payload-scatter-chart"),
-    ]
+
+        dcc.Graph(id="timeline-success"),
+
+        html.Div(
+            style={"fontSize": "12px", "opacity": 0.75, "marginTop": "8px"},
+            children=[
+                "Notes: This dataset uses IDs for launchpad/rocket/payloads. "
+                "If you want human-readable names (e.g., 'KSC LC-39A'), we can enrich it by joining "
+                "with SpaceX launchpad/rocket reference tables."
+            ],
+        ),
+    ],
 )
 
-# ------------------ 4️⃣ Callbacks ------------------
+def apply_filters(data: pd.DataFrame, launchpad_value: str, rocket_value: str) -> pd.DataFrame:
+    out = data
+    if launchpad_value != "ALL":
+        out = out[out["launchpad"] == launchpad_value]
+    if rocket_value != "ALL":
+        out = out[out["rocket"] == rocket_value]
+    return out
+
+
 @app.callback(
-    Output("success-pie-chart", "figure"),
-    Input("site-dropdown", "value"),
+    Output("pie-success", "figure"),
+    Output("bar-year", "figure"),
+    Output("timeline-success", "figure"),
+    Input("launchpad-dd", "value"),
+    Input("rocket-dd", "value"),
 )
-def update_piegraph(site):
-    if site == "All Sites":
-        data = spacex_df[spacex_df["class"] == 1]
-        return px.pie(data, names="Launch Site", title="Total Success Launches by All Sites")
-    else:
-        data = spacex_df[spacex_df["Launch Site"] == site]
-        return px.pie(data, names="class", title=f"Success vs Failed for Site → {site}")
+def update_charts(launchpad_value, rocket_value):
+    dff = apply_filters(df, launchpad_value, rocket_value)
 
-
-@app.callback(
-    Output("success-payload-scatter-chart", "figure"),
-    [Input("site-dropdown", "value"), Input("payload_slider", "value")],
-)
-def update_scattergraph(site, payload_range):
-    low, high = payload_range
-    if site == "All Sites":
-        data = spacex_df
-        title = "Correlation Between Payload and Success for All Sites"
-    else:
-        data = spacex_df[spacex_df["Launch Site"] == site]
-        title = f"Correlation Between Payload and Success for Site → {site}"
-
-    in_range = (data["Payload Mass (kg)"] >= low) & (data["Payload Mass (kg)"] <= high)
-    return px.scatter(
-        data[in_range],
-        x="Payload Mass (kg)",
-        y="class",
-        color="Booster Version Category",
-        size="Payload Mass (kg)",
-        hover_data=["Payload Mass (kg)"],
-        title=title,
+    # --- Pie: Success vs Failure vs Unknown
+    pie = px.pie(
+        dff,
+        names="success_label",
+        title="Outcome Distribution",
     )
 
+    # --- Bar: launches per year
+    year_counts = (
+        dff.dropna(subset=["year"])
+           .groupby("year", as_index=False)
+           .size()
+           .rename(columns={"size": "launches"})
+           .sort_values("year")
+    )
+    bar = px.bar(
+        year_counts,
+        x="year",
+        y="launches",
+        title="Launches by Year",
+    )
 
-# ------------------ 5️⃣ Run locally (Render will use gunicorn) ------------------
+    # --- Timeline: success over time (scatter)
+    # y is success_num; Unknown becomes NaN and will be omitted
+    tdf = dff.dropna(subset=["date_utc_dt"])
+    timeline = px.scatter(
+        tdf,
+        x="date_utc_dt",
+        y="success_num",
+        color="success_label",
+        hover_data=["name", "flight_number", "launchpad", "rocket"],
+        title="Launch Outcomes Over Time",
+    )
+    timeline.update_yaxes(tickvals=[0, 1], ticktext=["Failure", "Success"], title=None)
+
+    return pie, bar, timeline
+
+
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8050"))
+    port = int(os.environ.get("PORT", "8050"))
     app.run_server(host="0.0.0.0", port=port, debug=False)
